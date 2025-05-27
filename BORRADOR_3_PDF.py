@@ -143,6 +143,11 @@ class PDFTextExtractor:
         self.formula_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.formula_frame, text="Configuración de Fórmulas")
         
+        # Pestaña de limpieza de texto
+        self.clean_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.clean_frame, text="Limpiar Texto")
+        self.setup_clean_tab()
+        
         self.setup_main_tab()
         self.setup_formula_tab()
     
@@ -320,6 +325,34 @@ class PDFTextExtractor:
         self.formula_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         formula_scroll.pack(side=tk.RIGHT, fill=tk.Y)
     
+    def setup_clean_tab(self):
+        """Configura la pestaña para limpiar texto"""
+        container = ttk.Frame(self.clean_frame, padding="20")
+        container.pack(fill=tk.BOTH, expand=True)
+
+        title = ttk.Label(container, text="Eliminar Palabras o Frases del Texto Extraído", font=("Arial", 14, "bold"))
+        title.pack(pady=(0, 15))
+
+        instr = ttk.Label(container, text="Escribe cada palabra o frase a eliminar (una por línea):")
+        instr.pack(anchor=tk.W)
+
+        self.clean_text_box = scrolledtext.ScrolledText(container, height=6, font=("Consolas", 10))
+        self.clean_text_box.pack(fill=tk.X, pady=(0, 10))
+
+        # Opción para añadir "Página X" al inicio de cada página
+        self.add_page_index = tk.BooleanVar(value=True)
+        page_index_check = ttk.Checkbutton(container, text='Añadir "Página X" al inicio de cada página',
+                                           variable=self.add_page_index)
+        page_index_check.pack(anchor=tk.W, pady=(0, 10))
+
+        # Botón para limpiar el texto
+        clean_btn = ttk.Button(container, text="Limpiar Texto Extraído", command=self.clean_extracted_text)
+        clean_btn.pack(pady=(10, 0))
+
+        # Mensaje de estado
+        self.clean_status = ttk.Label(container, text="", foreground="green")
+        self.clean_status.pack(pady=(10, 0))
+
     def toggle_page_selection(self):
         """Habilitar/deshabilitar la entrada de páginas específicas"""
         if self.all_pages.get():
@@ -877,6 +910,37 @@ class PDFTextExtractor:
         # Cerrar ventana de vista previa si está abierta
         if self.preview_window and self.preview_window.winfo_exists():
             self.preview_window.destroy()
+
+    def clean_extracted_text(self):
+        """Elimina palabras/frases del texto extraído y añade índice de página si se desea"""
+        if not self.extracted_text:
+            self.clean_status.config(text="No hay texto extraído.", foreground="red")
+            return
+
+        # Obtener palabras/frases a eliminar
+        to_remove = self.clean_text_box.get(1.0, tk.END).strip().split('\n')
+        cleaned_text = self.extracted_text
+
+        for item in to_remove:
+            item = item.strip()
+            if item:
+                cleaned_text = cleaned_text.replace(item, "")
+
+        # Añadir "Página X" al inicio de cada página si está activado
+        if self.add_page_index.get():
+            # Reemplaza los marcadores de página por "Página X" al inicio de línea
+            def add_page_header(match):
+                page_num = match.group(1)
+                return f"\nPágina {page_num}\n"
+            cleaned_text = re.sub(r"\n--- Página (\d+) ---\n", add_page_header, cleaned_text)
+        else:
+            # Quita los marcadores de página si no se quiere el índice
+            cleaned_text = re.sub(r"\n--- Página (\d+) ---\n", "\n", cleaned_text)
+
+        self.extracted_text = cleaned_text
+        self.text_area.delete(1.0, tk.END)
+        self.text_area.insert(1.0, self.extracted_text)
+        self.clean_status.config(text="Texto limpiado correctamente.", foreground="green")
 
 def main():
     """Función principal con verificación de dependencias"""
