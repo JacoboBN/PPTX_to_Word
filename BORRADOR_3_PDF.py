@@ -7,192 +7,629 @@ import os
 from pathlib import Path
 import tempfile
 import re
+import json
+from PIL import Image, ImageEnhance, ImageFilter
+import fitz  # PyMuPDF
+import io
 
-class PDFTextExtractor:
+class PDFFormulaExtractor:
     def __init__(self, root):
         self.root = root
-        self.root.title("Extractor de Texto PDF Mejorado")
-        self.root.geometry("900x700")
+        self.root.title("Extractor PDF con Reconocimiento de Fórmulas")
+        self.root.geometry("1000x800")
         
         # Variable para almacenar el texto extraído
         self.extracted_text = ""
         
-        # API Key para OCR Space (opcional - puedes usar la gratuita)
-        self.ocr_api_key = "K83967071688957"  # Tu API key
+        # API Keys para diferentes servicios OCR
+        self.ocr_space_key = "K83967071688957"  # Tu API key actual
+        
+        # Patrones de fórmulas matemáticas comunes
+        self.math_patterns = self.initialize_math_patterns()
         
         self.setup_ui()
     
+    def initialize_math_patterns(self):
+        """Inicializar patrones de reconocimiento de fórmulas matemáticas"""
+        return {
+            # Patrones de símbolos matemáticos mal reconocidos por OCR
+            'symbol_corrections': {
+                # Letras griegas comunes
+                'α': ['a', 'α', 'alpha'],
+                'β': ['b', 'β', 'beta', 'B'],
+                'γ': ['y', 'γ', 'gamma'],
+                'δ': ['d', 'δ', 'delta'],
+                'ε': ['e', 'ε', 'epsilon'],
+                'π': ['pi', 'π', 'TI', 'n'],
+                'σ': ['o', 'σ', 'sigma'],
+                'μ': ['u', 'μ', 'mu'],
+                'λ': ['λ', 'lambda'],
+                'Σ': ['E', 'Σ', 'sum'],
+                
+                # Operadores matemáticos
+                '×': ['x', '*', 'X'],
+                '÷': ['/', ':'],
+                '≈': ['~', '≈', 'approx'],
+                '≠': ['!=', '≠'],
+                '≤': ['<=', '≤'],
+                '≥': ['>=', '≥'],
+                '∞': ['inf', '∞', 'infinity'],
+                '√': ['sqrt', '√', 'V'],
+                '∫': ['integral', '∫', 'f'],
+                '∂': ['partial', '∂', 'd'],
+                '∇': ['nabla', '∇', 'V'],
+                
+                # Superíndices/subíndices comunes
+                '²': ['^2', '2'],
+                '³': ['^3', '3'],
+                '¹': ['^1', '1'],
+                '⁻¹': ['^-1', '^(-1)'],
+            },
+            
+            # Patrones de estructura de fórmulas
+            'formula_structures': [
+                # Fracciones
+                r'(\w+)\s*/\s*(\w+)',  # a/b
+                r'(\w+)\s*÷\s*(\w+)',  # a÷b
+                
+                # Exponentes
+                r'(\w+)\^(\d+)',  # a^2
+                r'(\w+)\^{([^}]+)}',  # a^{n+1}
+                
+                # Raíces
+                r'√\(([^)]+)\)',  # √(x)
+                r'√(\w+)',  # √x
+                
+                # Sumatorias
+                r'Σ\s*(\w+)',  # Σx
+                r'∑\s*(\w+)',  # ∑x
+                
+                # Integrales
+                r'∫\s*([^d]+)\s*d(\w+)',  # ∫f(x)dx
+                
+                # Logaritmos
+                r'log\(([^)]+)\)',  # log(x)
+                r'ln\(([^)]+)\)',   # ln(x)
+                
+                # Trigonométricas
+                r'(sin|cos|tan|sec|csc|cot)\(([^)]+)\)',
+                
+                # Matrices/vectores
+                r'\[([^\]]+)\]',  # [a, b, c]
+                r'\(([^)]+)\)',   # (a, b, c)
+            ]
+        }
+    
     def setup_ui(self):
-        # Frame principal
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # Frame principal con scroll
+        main_canvas = tk.Canvas(self.root)
+        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=main_canvas.yview)
+        scrollable_frame = ttk.Frame(main_canvas)
         
-        # Configurar expansión
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(4, weight=1)
+        main_canvas.configure(yscrollcommand=scrollbar.set)
+        main_canvas.bind('<Configure>', lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all")))
+        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        
+        main_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Frame principal
+        main_frame = ttk.Frame(scrollable_frame, padding="10")
+        main_frame.pack(fill="both", expand=True)
         
         # Título
-        title_label = ttk.Label(main_frame, text="Extractor de Texto PDF Mejorado", 
+        title_label = ttk.Label(main_frame, text="Extractor PDF con Reconocimiento Avanzado de Fórmulas", 
                                font=("Arial", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        title_label.pack(pady=(0, 20))
         
-        # Botón para seleccionar archivo
-        self.select_btn = ttk.Button(main_frame, text="Seleccionar PDF", 
-                                    command=self.select_file)
-        self.select_btn.grid(row=1, column=0, padx=(0, 10), sticky=tk.W)
+        # Frame de selección de archivo
+        file_frame = ttk.LabelFrame(main_frame, text="Selección de Archivo", padding="10")
+        file_frame.pack(fill="x", pady=(0, 10))
         
-        # Label para mostrar archivo seleccionado
-        self.file_label = ttk.Label(main_frame, text="Ningún archivo seleccionado")
-        self.file_label.grid(row=1, column=1, sticky=(tk.W, tk.E))
+        file_controls = ttk.Frame(file_frame)
+        file_controls.pack(fill="x")
         
-        # Frame para opciones OCR
-        ocr_frame = ttk.LabelFrame(main_frame, text="Opciones OCR", padding="5")
-        ocr_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
-        ocr_frame.columnconfigure(1, weight=1)
+        self.select_btn = ttk.Button(file_controls, text="Seleccionar PDF", command=self.select_file)
+        self.select_btn.pack(side="left", padx=(0, 10))
         
-        # Checkbox para OCR
-        self.use_ocr = tk.BooleanVar()
-        self.ocr_checkbox = ttk.Checkbutton(ocr_frame, text="Usar OCR (para PDFs escaneados)", 
-                                           variable=self.use_ocr)
-        self.ocr_checkbox.grid(row=0, column=0, sticky=tk.W)
+        self.file_label = ttk.Label(file_controls, text="Ningún archivo seleccionado")
+        self.file_label.pack(side="left", fill="x", expand=True)
         
-        # Checkbox para mejorar fórmulas
-        self.improve_formulas = tk.BooleanVar(value=True)
-        self.formulas_checkbox = ttk.Checkbutton(ocr_frame, text="Mejorar reconocimiento de fórmulas", 
-                                                variable=self.improve_formulas)
-        self.formulas_checkbox.grid(row=0, column=1, padx=(20, 0), sticky=tk.W)
+        self.total_pages_label = ttk.Label(file_controls, text="", foreground="gray")
+        self.total_pages_label.pack(side="right")
         
-        # Selector de motor OCR
-        ttk.Label(ocr_frame, text="Motor OCR:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
-        self.ocr_engine = tk.StringVar(value="2")
-        ocr_combo = ttk.Combobox(ocr_frame, textvariable=self.ocr_engine, 
-                                values=["1 (Básico)", "2 (Avanzado)", "3 (Beta)"], 
-                                width=15, state="readonly")
-        ocr_combo.grid(row=1, column=1, sticky=tk.W, padx=(5, 0), pady=(5, 0))
+        # Frame de configuración de extracción
+        config_frame = ttk.LabelFrame(main_frame, text="Configuración de Extracción", padding="10")
+        config_frame.pack(fill="x", pady=(0, 10))
         
-        # Frame para selección de páginas
-        page_frame = ttk.Frame(main_frame)
-        page_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
-        page_frame.columnconfigure(1, weight=1)
+        # Método de extracción
+        method_frame = ttk.Frame(config_frame)
+        method_frame.pack(fill="x", pady=(0, 10))
         
-        # Checkbox para todas las páginas
-        self.all_pages = tk.BooleanVar(value=True)
-        self.all_pages_checkbox = ttk.Checkbutton(page_frame, text="Todas las páginas", 
-                                                 variable=self.all_pages,
-                                                 command=self.toggle_page_selection)
-        self.all_pages_checkbox.grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(method_frame, text="Método de extracción:").pack(side="left")
         
-        # Label y entry para páginas específicas
-        self.pages_label = ttk.Label(page_frame, text="Páginas específicas (ej: 1,3,5-8):")
-        self.pages_label.grid(row=0, column=1, padx=(20, 5), sticky=tk.W)
-        
-        self.pages_entry = ttk.Entry(page_frame, width=20, state="disabled")
-        self.pages_entry.grid(row=0, column=2, sticky=tk.W)
-        
-        # Label informativo sobre total de páginas
-        self.total_pages_label = ttk.Label(page_frame, text="", foreground="gray")
-        self.total_pages_label.grid(row=0, column=3, padx=(10, 0), sticky=tk.W)
-        
-        # Área de texto para mostrar el contenido
-        text_frame = ttk.Frame(main_frame)
-        text_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(20, 0))
-        text_frame.columnconfigure(0, weight=1)
-        text_frame.rowconfigure(0, weight=1)
-        
-        self.text_area = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, 
-                                                  width=80, height=25, font=("Consolas", 10))
-        self.text_area.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Frame para botones inferiores
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=5, column=0, columnspan=3, pady=(20, 0))
-        
-        # Botón para extraer texto
-        self.extract_btn = ttk.Button(button_frame, text="Extraer Texto", 
-                                     command=self.extract_text, state="disabled")
-        self.extract_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Botón para guardar texto
-        self.save_btn = ttk.Button(button_frame, text="Guardar como TXT", 
-                                  command=self.save_text, state="disabled")
-        self.save_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Botón para limpiar
-        self.clear_btn = ttk.Button(button_frame, text="Limpiar", 
-                                   command=self.clear_text)
-        self.clear_btn.pack(side=tk.LEFT)
-        
-        # Barra de progreso
-        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
-        
-        # Label de estado
-        self.status_label = ttk.Label(main_frame, text="Listo")
-        self.status_label.grid(row=7, column=0, columnspan=3, pady=(5, 0))
-        
-        self.selected_file = None
-        self.total_pages = 0
-    
-    def improve_mathematical_formulas(self, text):
-        """Mejorar el reconocimiento de fórmulas matemáticas"""
-        if not self.improve_formulas.get():
-            return text
-        
-        # Patrones comunes de fórmulas mal reconocidas
-        improvements = [
-            # Fracciones simples
-            (r'(\w+)\s*×\s*\(\s*(\w+)\s*-\s*(\w+)\s*\)\s*r\s*=\s*(\w+)\s*\+\s*(\w+)', 
-             r'r = \1 × (\2 - \3) / (\4 + \5)'),
-            
-            # Patrón específico de tu fórmula
-            (r'N\s*×\s*\(\s*B\s*-\s*C\s*\)\s*r\s*=\s*N\s*\+\s*V', 
-             r'r = N × (B - C) / (N + V)'),
-            
-            # Separar variables de definiciones
-            (r'([A-Z]):\s*([^A-Z\n]+?)(?=[A-Z]:|\n\n|\Z)', 
-             r'\1: \2\n'),
-            
-            # Mejorar espaciado en fórmulas
-            (r'(\w)\s*=\s*(\w)', r'\1 = \2'),
-            (r'(\w)\s*\+\s*(\w)', r'\1 + \2'),
-            (r'(\w)\s*-\s*(\w)', r'\1 - \2'),
-            (r'(\w)\s*×\s*(\w)', r'\1 × \2'),
-            (r'(\w)\s*/\s*(\w)', r'\1 / \2'),
-            
-            # Corregir paréntesis mal espaciados
-            (r'\(\s*([^)]+)\s*\)', r'(\1)'),
-            
-            # Mejorar formato de definiciones de variables
-            (r'([A-Z])\s*:\s*([^A-Z\n]+)', r'\1: \2'),
+        self.extraction_method = tk.StringVar(value="hybrid")
+        methods = [
+            ("Híbrido (Recomendado)", "hybrid"),
+            ("Solo Texto Directo", "direct"),
+            ("Solo OCR", "ocr"),
+            ("OCR + Preprocesamiento de Imágenes", "ocr_enhanced")
         ]
         
-        improved_text = text
-        for pattern, replacement in improvements:
-            improved_text = re.sub(pattern, replacement, improved_text, flags=re.IGNORECASE | re.MULTILINE)
+        for text, value in methods:
+            ttk.Radiobutton(method_frame, text=text, variable=self.extraction_method, 
+                           value=value).pack(side="left", padx=(10, 0))
         
-        return improved_text
+        # Configuración de fórmulas
+        formula_frame = ttk.LabelFrame(config_frame, text="Reconocimiento de Fórmulas", padding="5")
+        formula_frame.pack(fill="x", pady=(10, 0))
+        
+        # Opciones de mejora de fórmulas
+        self.enhance_formulas = tk.BooleanVar(value=True)
+        ttk.Checkbutton(formula_frame, text="Mejorar reconocimiento de fórmulas matemáticas", 
+                       variable=self.enhance_formulas).pack(anchor="w")
+        
+        self.fix_symbols = tk.BooleanVar(value=True)
+        ttk.Checkbutton(formula_frame, text="Corregir símbolos matemáticos mal reconocidos", 
+                       variable=self.fix_symbols).pack(anchor="w")
+        
+        self.detect_structures = tk.BooleanVar(value=True)
+        ttk.Checkbutton(formula_frame, text="Detectar estructuras matemáticas (fracciones, exponentes, etc.)", 
+                       variable=self.detect_structures).pack(anchor="w")
+        
+        self.preserve_layout = tk.BooleanVar(value=True)
+        ttk.Checkbutton(formula_frame, text="Preservar layout de ecuaciones", 
+                       variable=self.preserve_layout).pack(anchor="w")
+        
+        # Configuración OCR
+        ocr_frame = ttk.LabelFrame(config_frame, text="Configuración OCR", padding="5")
+        ocr_frame.pack(fill="x", pady=(10, 0))
+        
+        ocr_controls = ttk.Frame(ocr_frame)
+        ocr_controls.pack(fill="x")
+        
+        ttk.Label(ocr_controls, text="Motor OCR:").pack(side="left")
+        self.ocr_engine = tk.StringVar(value="2")
+        ocr_combo = ttk.Combobox(ocr_controls, textvariable=self.ocr_engine, 
+                                values=["1 (Básico)", "2 (Avanzado)", "3 (Beta - Mejor para fórmulas)"], 
+                                width=25, state="readonly")
+        ocr_combo.pack(side="left", padx=(5, 20))
+        
+        ttk.Label(ocr_controls, text="Idioma:").pack(side="left")
+        self.ocr_language = tk.StringVar(value="eng")
+        lang_combo = ttk.Combobox(ocr_controls, textvariable=self.ocr_language, 
+                                 values=["eng", "spa", "fre", "ger"], 
+                                 width=10, state="readonly")
+        lang_combo.pack(side="left", padx=(5, 0))
+        
+        # Selección de páginas
+        page_frame = ttk.LabelFrame(config_frame, text="Selección de Páginas", padding="5")
+        page_frame.pack(fill="x", pady=(10, 0))
+        
+        page_controls = ttk.Frame(page_frame)
+        page_controls.pack(fill="x")
+        
+        self.all_pages = tk.BooleanVar(value=True)
+        self.all_pages_checkbox = ttk.Checkbutton(page_controls, text="Todas las páginas", 
+                                                 variable=self.all_pages,
+                                                 command=self.toggle_page_selection)
+        self.all_pages_checkbox.pack(side="left")
+        
+        ttk.Label(page_controls, text="Páginas específicas (ej: 1,3,5-8):").pack(side="left", padx=(20, 5))
+        
+        self.pages_entry = ttk.Entry(page_controls, width=20, state="disabled")
+        self.pages_entry.pack(side="left")
+        
+        # Área de texto para mostrar el contenido
+        text_frame = ttk.LabelFrame(main_frame, text="Texto Extraído", padding="10")
+        text_frame.pack(fill="both", expand=True, pady=(10, 0))
+        
+        # Crear notebook para diferentes vistas
+        self.notebook = ttk.Notebook(text_frame)
+        self.notebook.pack(fill="both", expand=True)
+        
+        # Pestaña de texto completo
+        self.text_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.text_frame, text="Texto Completo")
+        
+        self.text_area = scrolledtext.ScrolledText(self.text_frame, wrap=tk.WORD, 
+                                                  width=80, height=20, font=("Consolas", 10))
+        self.text_area.pack(fill="both", expand=True)
+        
+        # Pestaña de fórmulas detectadas
+        self.formula_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.formula_frame, text="Fórmulas Detectadas")
+        
+        self.formula_area = scrolledtext.ScrolledText(self.formula_frame, wrap=tk.WORD, 
+                                                     width=80, height=20, font=("Consolas", 10))
+        self.formula_area.pack(fill="both", expand=True)
+        
+        # Frame para botones y controles
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(fill="x", pady=(20, 0))
+        
+        # Botones de acción
+        button_frame = ttk.Frame(control_frame)
+        button_frame.pack(side="left")
+        
+        self.extract_btn = ttk.Button(button_frame, text="Extraer Texto y Fórmulas", 
+                                     command=self.extract_text, state="disabled")
+        self.extract_btn.pack(side="left", padx=(0, 10))
+        
+        self.save_btn = ttk.Button(button_frame, text="Guardar Texto", 
+                                  command=self.save_text, state="disabled")
+        self.save_btn.pack(side="left", padx=(0, 10))
+        
+        self.save_formulas_btn = ttk.Button(button_frame, text="Guardar Fórmulas", 
+                                           command=self.save_formulas, state="disabled")
+        self.save_formulas_btn.pack(side="left", padx=(0, 10))
+        
+        self.clear_btn = ttk.Button(button_frame, text="Limpiar", command=self.clear_text)
+        self.clear_btn.pack(side="left")
+        
+        # Barra de progreso y estado
+        progress_frame = ttk.Frame(control_frame)
+        progress_frame.pack(side="right", fill="x", expand=True)
+        
+        self.progress = ttk.Progressbar(progress_frame, mode='indeterminate')
+        self.progress.pack(fill="x", pady=(0, 5))
+        
+        self.status_label = ttk.Label(progress_frame, text="Listo")
+        self.status_label.pack()
+        
+        # Variables de instancia
+        self.selected_file = None
+        self.total_pages = 0
+        self.extracted_formulas = []
+    
+    def preprocess_image_for_ocr(self, image):
+        """Preprocesar imagen para mejorar reconocimiento OCR de fórmulas"""
+        try:
+            # Convertir a escala de grises si no lo está
+            if image.mode != 'L':
+                image = image.convert('L')
+            
+            # Aumentar contraste
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(2.0)
+            
+            # Aumentar nitidez
+            enhancer = ImageEnhance.Sharpness(image)
+            image = enhancer.enhance(2.0)
+            
+            # Aplicar filtro para reducir ruido
+            image = image.filter(ImageFilter.MedianFilter())
+            
+            # Redimensionar si es muy pequeño (mejora OCR)
+            width, height = image.size
+            if width < 300 or height < 300:
+                scale_factor = max(300/width, 300/height)
+                new_size = (int(width * scale_factor), int(height * scale_factor))
+                image = image.resize(new_size, Image.LANCZOS)
+            
+            return image
+        except Exception as e:
+            print(f"Error en preprocesamiento de imagen: {e}")
+            return image
+    
+    def extract_with_pymupdf(self, file_path, selected_pages=None):
+        """Extraer texto usando PyMuPDF con mejor soporte para fórmulas"""
+        text = ""
+        try:
+            doc = fitz.open(file_path)
+            total_pages = len(doc)
+            
+            if selected_pages is None:
+                selected_pages = list(range(1, total_pages + 1))
+            
+            for page_num in selected_pages:
+                if 1 <= page_num <= total_pages:
+                    page = doc[page_num - 1]
+                    
+                    # Extraer texto con información de formato
+                    blocks = page.get_text("dict")
+                    page_text = self.process_pymupdf_blocks(blocks, page_num)
+                    
+                    if page_text.strip():
+                        text += f"\n--- Página {page_num} ---\n"
+                        text += page_text + "\n"
+            
+            doc.close()
+            return text
+            
+        except Exception as e:
+            raise Exception(f"Error con PyMuPDF: {str(e)}")
+    
+    def process_pymupdf_blocks(self, blocks, page_num):
+        """Procesar bloques de texto de PyMuPDF para preservar formato de fórmulas"""
+        text = ""
+        
+        try:
+            for block in blocks["blocks"]:
+                if "lines" in block:
+                    block_text = ""
+                    for line in block["lines"]:
+                        line_text = ""
+                        for span in line["spans"]:
+                            span_text = span["text"]
+                            
+                            # Detectar si puede ser una fórmula por formato
+                            font = span.get("font", "").lower()
+                            size = span.get("size", 0)
+                            
+                            # Características de fórmulas: fuentes math, símbolos especiales
+                            is_math = any(indicator in font for indicator in 
+                                        ["math", "symbol", "times", "cambria"])
+                            
+                            if is_math or self.contains_math_symbols(span_text):
+                                span_text = f"[MATH]{span_text}[/MATH]"
+                            
+                            line_text += span_text
+                        
+                        if line_text.strip():
+                            block_text += line_text + "\n"
+                    
+                    if block_text.strip():
+                        text += block_text + "\n"
+        
+        except Exception as e:
+            print(f"Error procesando bloques PyMuPDF: {e}")
+            # Fallback a extracción simple
+            return blocks.get("text", "")
+        
+        return text
+    
+    def contains_math_symbols(self, text):
+        """Detectar si el texto contiene símbolos matemáticos"""
+        math_indicators = [
+            '=', '+', '-', '×', '÷', '/', '^', '²', '³', '√', '∫', '∑', 'Σ',
+            'α', 'β', 'γ', 'δ', 'ε', 'π', 'σ', 'μ', 'λ', '≈', '≠', '≤', '≥',
+            '∞', '∂', '∇', 'sin', 'cos', 'tan', 'log', 'ln', 'exp'
+        ]
+        
+        return any(symbol in text for symbol in math_indicators)
+    
+    def enhanced_ocr_extraction(self, file_path, selected_pages=None):
+        """OCR mejorado con preprocesamiento de imágenes para fórmulas"""
+        try:
+            # Convertir PDF a imágenes con alta resolución
+            doc = fitz.open(file_path)
+            text = ""
+            
+            if selected_pages is None:
+                selected_pages = list(range(1, len(doc) + 1))
+            
+            for page_num in selected_pages:
+                if 1 <= page_num <= len(doc):
+                    page = doc[page_num - 1]
+                    
+                    # Convertir página a imagen con alta resolución
+                    matrix = fitz.Matrix(3.0, 3.0)  # Escala 3x para mejor calidad
+                    pix = page.get_pixmap(matrix=matrix)
+                    img_data = pix.tobytes("png")
+                    
+                    # Cargar imagen con PIL
+                    image = Image.open(io.BytesIO(img_data))
+                    
+                    # Preprocesar imagen
+                    if self.extraction_method.get() == "ocr_enhanced":
+                        image = self.preprocess_image_for_ocr(image)
+                    
+                    # Convertir a bytes para OCR
+                    img_bytes = io.BytesIO()
+                    image.save(img_bytes, format='PNG')
+                    img_bytes = img_bytes.getvalue()
+                    
+                    # Realizar OCR
+                    page_text = self.ocr_space_api(img_bytes, page_num)
+                    
+                    if page_text.strip():
+                        text += f"\n--- Página {page_num} (OCR Mejorado) ---\n"
+                        text += page_text + "\n"
+            
+            doc.close()
+            return text
+            
+        except Exception as e:
+            raise Exception(f"Error en OCR mejorado: {str(e)}")
+    
+    def ocr_space_api(self, image_data, page_num):
+        """Llamada a OCR Space API con configuración optimizada para fórmulas"""
+        try:
+            url = 'https://api.ocr.space/parse/image'
+            
+            files = {'file': ('page.png', image_data, 'image/png')}
+            
+            engine = self.ocr_engine.get().split()[0]
+            language = self.ocr_language.get()
+            
+            data = {
+                'apikey': self.ocr_space_key,
+                'language': language,
+                'detectOrientation': 'true',
+                'scale': 'true',
+                'OCREngine': engine,
+                'isTable': 'true',
+                'detectCheckbox': 'false',
+                'checkboxTemplate': '0',
+            }
+            
+            # Motor 3 tiene mejores capacidades para fórmulas
+            if engine == "3":
+                data['isTable'] = 'false'  # Mejor para fórmulas continuas
+            
+            response = requests.post(url, files=files, data=data, timeout=60)
+            result = response.json()
+            
+            if result.get('IsErroredOnProcessing'):
+                raise Exception(f"Error en OCR: {result.get('ErrorMessage', 'Error desconocido')}")
+            
+            text = ""
+            if 'ParsedResults' in result and result['ParsedResults']:
+                parsed_text = result['ParsedResults'][0].get('ParsedText', '')
+                text = self.post_process_ocr_text(parsed_text)
+            
+            return text
+            
+        except Exception as e:
+            raise Exception(f"Error en OCR API: {str(e)}")
+    
+    def fix_mathematical_symbols(self, text):
+        """Corregir símbolos matemáticos mal reconocidos"""
+        if not self.fix_symbols.get():
+            return text
+        
+        corrections = self.math_patterns['symbol_corrections']
+        
+        # Aplicar correcciones de símbolos
+        for correct_symbol, wrong_variants in corrections.items():
+            for wrong in wrong_variants:
+                # Usar contexto para evitar correcciones erróneas
+                # Por ejemplo, solo corregir 'x' por '×' si está entre números
+                if correct_symbol == '×' and wrong == 'x':
+                    text = re.sub(r'(\d+)\s*x\s*(\d+)', r'\1 × \2', text)
+                    text = re.sub(r'(\w+)\s*x\s*\(', r'\1 × (', text)
+                else:
+                    text = text.replace(wrong, correct_symbol)
+        
+        return text
+    
+    def detect_mathematical_structures(self, text):
+        """Detectar y mejorar estructuras matemáticas"""
+        if not self.detect_structures.get():
+            return text
+        
+        # Detectar fracciones escritas como "a/b" y mejorar formato
+        text = re.sub(r'(\w+)\s*/\s*(\w+)', r'(\1)/(\2)', text)
+        
+        # Detectar exponentes
+        text = re.sub(r'(\w+)\^(\d+)', r'\1^\2', text)
+        text = re.sub(r'(\w+)\^{([^}]+)}', r'\1^{\2}', text)
+        
+        # Detectar raíces cuadradas
+        text = re.sub(r'sqrt\(([^)]+)\)', r'√(\1)', text)
+        text = re.sub(r'√\s*(\w+)', r'√\1', text)
+        
+        # Mejorar sumatorias
+        text = re.sub(r'(sum|SUM|Σ|∑)\s*(\w+)', r'Σ\2', text)
+        
+        # Mejorar integrales
+        text = re.sub(r'integral\s*([^d]+)\s*d(\w+)', r'∫\1 d\2', text)
+        
+        # Mejorar logaritmos
+        text = re.sub(r'log\s*\(\s*([^)]+)\s*\)', r'log(\1)', text)
+        text = re.sub(r'ln\s*\(\s*([^)]+)\s*\)', r'ln(\1)', text)
+        
+        return text
+    
+    def extract_formulas(self, text):
+        """Extraer fórmulas identificadas del texto"""
+        formulas = []
+        
+        # Buscar bloques marcados como matemáticos
+        math_blocks = re.findall(r'\[MATH\](.*?)\[/MATH\]', text)
+        formulas.extend(math_blocks)
+        
+        # Buscar patrones de fórmulas
+        formula_patterns = [
+            r'[^.!?]*[=≈≠≤≥].*?[^.!?]*',  # Líneas con operadores de igualdad
+            r'[^.!?]*[∫∑Σ].*?[^.!?]*',    # Líneas con integrales o sumatorias
+            r'[^.!?]*\b\w+\^[\d{].*?[^.!?]*',  # Líneas con exponentes
+            r'[^.!?]*√.*?[^.!?]*',        # Líneas con raíces
+            r'[^.!?]*\([^)]*[+\-×÷*/][^)]*\).*?[^.!?]*',  # Expresiones en paréntesis
+        ]
+        
+        for pattern in formula_patterns:
+            matches = re.findall(pattern, text, re.MULTILINE)
+            for match in matches:
+                match = match.strip()
+                if len(match) > 3 and match not in formulas:
+                    formulas.append(match)
+        
+        # Filtrar fórmulas que son muy largas (probablemente no son fórmulas)
+        formulas = [f for f in formulas if len(f) < 200]
+        
+        return formulas
     
     def post_process_ocr_text(self, text):
-        """Post-procesamiento específico para texto OCR"""
-        # Correcciones comunes de OCR
-        corrections = {
-            'CINs': 'CINS',
-            'ICATI CADE': 'ICADE',
-            'Legal Framework of Companies': 'Legal Framework of Companies',
-            '•': '■',  # Cambiar bullets mal reconocidos
-        }
+        """Post-procesamiento completo del texto OCR"""
+        # Correcciones básicas de OCR
+        text = text.replace('CINs', 'CINS')
+        text = text.replace('ICATI CADE', 'ICADE')
+        text = text.replace('•', '■')
         
-        processed_text = text
-        for wrong, correct in corrections.items():
-            processed_text = processed_text.replace(wrong, correct)
+        # Aplicar mejoras de fórmulas si están activadas
+        if self.enhance_formulas.get():
+            text = self.fix_mathematical_symbols(text)
+            text = self.detect_mathematical_structures(text)
         
-        # Mejorar formato de fórmulas si está activado
-        if self.improve_formulas.get():
-            processed_text = self.improve_mathematical_formulas(processed_text)
+        # Mejorar formato general
+        if self.preserve_layout.get():
+            # Preservar espaciado de ecuaciones
+            text = re.sub(r'([=≈≠≤≥])\s*([^=≈≠≤≥\n]*)', r'\1 \2', text)
+            text = re.sub(r'([+\-×÷*/])\s*', r' \1 ', text)
+            text = re.sub(r'\s+([+\-×÷*/])\s+', r' \1 ', text)
         
-        return processed_text
+        return text
+    
+    def hybrid_extraction(self, file_path, selected_pages=None):
+        """Método híbrido: combina extracción directa y OCR"""
+        text = ""
+        
+        try:
+            # Intentar PyMuPDF primero
+            try:
+                pymupdf_text = self.extract_with_pymupdf(file_path, selected_pages)
+                if pymupdf_text.strip():
+                    text += "=== EXTRACCIÓN DIRECTA (PyMuPDF) ===\n"
+                    text += pymupdf_text + "\n"
+            except:
+                pass
+            
+            # Si no hay suficiente texto, o hay páginas que parecen escaneadas, usar OCR
+            if len(text.strip()) < 100:  # Muy poco texto extraído
+                try:
+                    ocr_text = self.enhanced_ocr_extraction(file_path, selected_pages)
+                    if ocr_text.strip():
+                        text += "\n=== EXTRACCIÓN OCR ===\n"
+                        text += ocr_text
+                except Exception as e:
+                    print(f"OCR falló: {e}")
+            
+            # Fallback a PyPDF2 si todo falla
+            if not text.strip():
+                text = self.extract_text_from_pdf(file_path, selected_pages)
+                if text.strip():
+                    text = "=== EXTRACCIÓN PYPDF2 ===\n" + text
+            
+            return text
+            
+        except Exception as e:
+            raise Exception(f"Error en extracción híbrida: {str(e)}")
+    
+    def extract_text_from_pdf(self, file_path, selected_pages=None):
+        """Extraer texto usando PyPDF2 (método original)"""
+        text = ""
+        try:
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                total_pages = len(pdf_reader.pages)
+                
+                if selected_pages is None:
+                    selected_pages = list(range(1, total_pages + 1))
+                
+                for page_num in selected_pages:
+                    if 1 <= page_num <= total_pages:
+                        page = pdf_reader.pages[page_num - 1]
+                        page_text = page.extract_text()
+                        if page_text.strip():
+                            text += f"\n--- Página {page_num} ---\n"
+                            text += page_text + "\n"
+        
+        except Exception as e:
+            raise Exception(f"Error al leer PDF con PyPDF2: {str(e)}")
+        
+        return text
     
     def toggle_page_selection(self):
         """Habilitar/deshabilitar la entrada de páginas específicas"""
@@ -219,25 +656,21 @@ class PDFTextExtractor:
             return list(range(1, total_pages + 1))
         
         try:
-            # Dividir por comas
             parts = page_input.split(',')
             
             for part in parts:
                 part = part.strip()
                 
                 if '-' in part:
-                    # Rango de páginas (ej: 3-7)
                     start, end = part.split('-')
                     start = int(start.strip())
                     end = int(end.strip())
                     
-                    # Validar rango
                     if start < 1 or end > total_pages or start > end:
                         raise ValueError(f"Rango inválido: {part}")
                     
                     pages.update(range(start, end + 1))
                 else:
-                    # Página individual
                     page_num = int(part)
                     if page_num < 1 or page_num > total_pages:
                         raise ValueError(f"Página fuera de rango: {page_num}")
@@ -264,105 +697,14 @@ class PDFTextExtractor:
             self.extract_btn.config(state="normal")
             self.status_label.config(text=f"Archivo seleccionado: {filename}")
             
-            # Obtener y mostrar total de páginas
             self.total_pages = self.get_total_pages(file_path)
             if self.total_pages > 0:
                 self.total_pages_label.config(text=f"(Total: {self.total_pages} páginas)")
             else:
                 self.total_pages_label.config(text="(No se pudo determinar el número de páginas)")
     
-    def extract_text_from_pdf(self, file_path, selected_pages=None):
-        """Extraer texto usando PyPDF2"""
-        text = ""
-        try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                total_pages = len(pdf_reader.pages)
-                
-                # Si no se especifican páginas, usar todas
-                if selected_pages is None:
-                    selected_pages = list(range(1, total_pages + 1))
-                
-                for page_num in selected_pages:
-                    if 1 <= page_num <= total_pages:
-                        page = pdf_reader.pages[page_num - 1]  # PyPDF2 usa índice 0
-                        page_text = page.extract_text()
-                        if page_text.strip():  # Solo agregar si hay texto
-                            text += f"\n--- Página {page_num} ---\n"
-                            text += page_text + "\n"
-        
-        except Exception as e:
-            raise Exception(f"Error al leer PDF: {str(e)}")
-        
-        return text
-    
-    def extract_text_with_ocr(self, file_path, selected_pages=None):
-        """Extraer texto usando OCR Space API mejorado"""
-        try:
-            url = 'https://api.ocr.space/parse/image'
-
-            # Si se especifican páginas, crear un PDF temporal solo con esas páginas
-            pdf_to_send = file_path
-            temp_file = None
-            if selected_pages is not None:
-                from PyPDF2 import PdfWriter, PdfReader
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-                writer = PdfWriter()
-                with open(file_path, 'rb') as infile:
-                    reader = PdfReader(infile)
-                    for page_num in selected_pages:
-                        if 1 <= page_num <= len(reader.pages):
-                            writer.add_page(reader.pages[page_num - 1])
-                    writer.write(temp_file)
-                temp_file.close()
-                pdf_to_send = temp_file.name
-
-            with open(pdf_to_send, 'rb') as file:
-                files = {'file': file}
-                
-                # Obtener motor OCR seleccionado
-                engine = self.ocr_engine.get().split()[0]
-                
-                data = {
-                    'apikey': self.ocr_api_key,
-                    'language': 'eng',  # Cambiar a inglés para mejor reconocimiento de fórmulas
-                    'detectOrientation': 'true',
-                    'scale': 'true',
-                    'OCREngine': engine,
-                    'filetype': 'PDF',
-                    'isTable': 'true',  # Mejorar reconocimiento de estructuras
-                }
-                
-                response = requests.post(url, files=files, data=data)
-                result = response.json()
-
-                if result.get('IsErroredOnProcessing'):
-                    raise Exception(f"Error en OCR: {result.get('ErrorMessage', 'Error desconocido')}")
-
-                text = ""
-                if 'ParsedResults' in result:
-                    for i, page_result in enumerate(result['ParsedResults']):
-                        if 'ParsedText' in page_result:
-                            page_text = page_result['ParsedText']
-                            # Post-procesar el texto
-                            page_text = self.post_process_ocr_text(page_text)
-                            text += f"\n--- Página {selected_pages[i] if selected_pages else i + 1} (OCR) ---\n"
-                            text += page_text + "\n"
-
-                return text
-
-        except Exception as e:
-            raise Exception(f"Error en OCR: {str(e)}")
-        finally:
-            # Eliminar el archivo temporal si se creó
-            if 'temp_file' in locals() and temp_file is not None:
-                try:
-                    os.unlink(temp_file.name)
-                except Exception:
-                    pass
-
     def extract_text(self):
-        """Extraer texto del PDF seleccionado"""
+        """Extraer texto del PDF seleccionado usando el método configurado"""
         if not self.selected_file:
             messagebox.showwarning("Advertencia", "Por favor selecciona un archivo PDF primero.")
             return
@@ -380,47 +722,50 @@ class PDFTextExtractor:
                 messagebox.showerror("Error", str(e))
                 return
 
-        # Mostrar barra de progreso
+        # Mostrar progreso
         self.progress.start(10)
+        method = self.extraction_method.get()
+        
         if selected_pages:
-            self.status_label.config(text=f"Extrayendo texto de páginas: {', '.join(map(str, selected_pages[:5]))}{'...' if len(selected_pages) > 5 else ''}")
+            page_text = f"páginas: {', '.join(map(str, selected_pages[:5]))}{'...' if len(selected_pages) > 5 else ''}"
         else:
-            self.status_label.config(text="Extrayendo texto de todas las páginas...")
+            page_text = "todas las páginas"
+        
+        self.status_label.config(text=f"Extrayendo con método {method} - {page_text}")
         self.root.update()
 
         try:
-            if self.use_ocr.get():
-                # OCR mejorado con post-procesamiento
-                self.extracted_text = self.extract_text_with_ocr(self.selected_file, selected_pages)
-                if not self.extracted_text.strip():
-                    # Si OCR no funciona, intentar método normal
-                    self.extracted_text = self.extract_text_from_pdf(self.selected_file, selected_pages)
-                    messagebox.showinfo("Info", "OCR no encontró texto. Se usó extracción normal.")
-            else:
-                # Extracción normal con páginas específicas
+            # Seleccionar método de extracción
+            if method == "direct":
                 self.extracted_text = self.extract_text_from_pdf(self.selected_file, selected_pages)
-                # Aplicar mejoras también al texto normal si está activado
-                if self.improve_formulas.get():
-                    self.extracted_text = self.post_process_ocr_text(self.extracted_text)
-
-            # Mostrar texto en el área de texto
-            self.text_area.delete(1.0, tk.END)
+            elif method == "ocr":
+                self.extracted_text = self.enhanced_ocr_extraction(self.selected_file, selected_pages)
+            elif method == "ocr_enhanced":
+                self.extracted_text = self.enhanced_ocr_extraction(self.selected_file, selected_pages)
+            else:  # hybrid
+                self.extracted_text = self.hybrid_extraction(self.selected_file, selected_pages)
+            
+            # Post-procesar si hay mejoras activadas
+            if self.enhance_formulas.get():
+                self.extracted_text = self.post_process_ocr_text(self.extracted_text)
+            
+            # Extraer fórmulas
+            self.extracted_formulas = self.extract_formulas(self.extracted_text)
+            
+            # Mostrar resultados
+            self.display_results()
+            
+            # Actualizar estado
+            pages_processed = len(selected_pages) if selected_pages else self.total_pages
+            formulas_found = len(self.extracted_formulas)
+            
+            self.status_label.config(text=f"Completado: {pages_processed} páginas, {formulas_found} fórmulas detectadas")
+            
+            # Habilitar botones de guardado
             if self.extracted_text.strip():
-                self.text_area.insert(1.0, self.extracted_text)
                 self.save_btn.config(state="normal")
-
-                # Mostrar estadísticas
-                pages_processed = len(selected_pages) if selected_pages else self.total_pages
-                method = "OCR mejorado" if self.use_ocr.get() else "extracción directa"
-                self.status_label.config(text=f"Texto extraído con {method} de {pages_processed} página(s)")
-            else:
-                self.text_area.insert(1.0, "No se pudo extraer texto del PDF.\n\n"
-                                           "Posibles soluciones:\n"
-                                           "1. Activa la opción 'Usar OCR' si es un PDF escaneado\n"
-                                           "2. Prueba con diferentes motores OCR\n"
-                                           "3. Verifica que el PDF contenga texto seleccionable\n"
-                                           "4. Verifica que las páginas especificadas sean correctas")
-                self.status_label.config(text="No se encontró texto en las páginas seleccionadas")
+            if self.extracted_formulas:
+                self.save_formulas_btn.config(state="normal")
 
         except Exception as e:
             messagebox.showerror("Error", f"Error al extraer texto:\n{str(e)}")
@@ -429,21 +774,69 @@ class PDFTextExtractor:
         finally:
             self.progress.stop()
     
+    def display_results(self):
+        """Mostrar resultados en las pestañas correspondientes"""
+        # Mostrar texto completo
+        self.text_area.delete(1.0, tk.END)
+        if self.extracted_text.strip():
+            self.text_area.insert(1.0, self.extracted_text)
+        else:
+            self.text_area.insert(1.0, "No se pudo extraer texto del PDF.\n\n"
+                                       "Sugerencias:\n"
+                                       "1. Prueba el método 'Híbrido'\n"
+                                       "2. Activa las opciones de mejora de fórmulas\n"
+                                       "3. Usa 'OCR + Preprocesamiento' para PDFs escaneados\n"
+                                       "4. Verifica que el PDF contenga texto o imágenes legibles")
+        
+        # Mostrar fórmulas detectadas
+        self.formula_area.delete(1.0, tk.END)
+        if self.extracted_formulas:
+            formula_text = "FÓRMULAS MATEMÁTICAS DETECTADAS:\n"
+            formula_text += "="*50 + "\n\n"
+            
+            for i, formula in enumerate(self.extracted_formulas, 1):
+                formula_text += f"Fórmula {i}:\n"
+                formula_text += f"{formula}\n\n"
+                formula_text += "-"*30 + "\n\n"
+            
+            # Agregar estadísticas
+            formula_text += f"\nESTADÍSTICAS:\n"
+            formula_text += f"Total de fórmulas encontradas: {len(self.extracted_formulas)}\n"
+            formula_text += f"Promedio de caracteres por fórmula: {sum(len(f) for f in self.extracted_formulas) // len(self.extracted_formulas)}\n"
+            
+            # Contar símbolos matemáticos
+            all_formulas_text = " ".join(self.extracted_formulas)
+            math_symbols = ['=', '+', '-', '×', '÷', '^', '√', '∫', '∑', 'π', 'α', 'β', 'γ']
+            symbol_counts = {symbol: all_formulas_text.count(symbol) for symbol in math_symbols if symbol in all_formulas_text}
+            
+            if symbol_counts:
+                formula_text += f"\nSímbolos matemáticos encontrados:\n"
+                for symbol, count in symbol_counts.items():
+                    formula_text += f"  {symbol}: {count} veces\n"
+            
+            self.formula_area.insert(1.0, formula_text)
+        else:
+            self.formula_area.insert(1.0, "No se detectaron fórmulas matemáticas.\n\n"
+                                          "Para mejorar la detección:\n"
+                                          "1. Activa 'Mejorar reconocimiento de fórmulas matemáticas'\n"
+                                          "2. Usa el motor OCR 3 (Beta - Mejor para fórmulas)\n"
+                                          "3. Asegúrate de que el PDF contenga fórmulas matemáticas\n"
+                                          "4. Prueba con el método 'OCR + Preprocesamiento'")
+    
     def save_text(self):
         """Guardar el texto extraído en un archivo TXT"""
         if not self.extracted_text:
             messagebox.showwarning("Advertencia", "No hay texto para guardar.")
             return
         
-        # Sugerir nombre de archivo basado en el PDF original
         if self.selected_file:
             pdf_name = Path(self.selected_file).stem
-            default_name = f"{pdf_name}_texto_mejorado.txt"
+            default_name = f"{pdf_name}_texto_completo.txt"
         else:
-            default_name = "texto_extraido_mejorado.txt"
+            default_name = "texto_extraido.txt"
         
         file_path = filedialog.asksaveasfilename(
-            title="Guardar texto como",
+            title="Guardar texto completo",
             defaultextension=".txt",
             initialvalue=default_name,
             filetypes=[("Archivos de texto", "*.txt"), ("Todos los archivos", "*.*")]
@@ -458,10 +851,74 @@ class PDFTextExtractor:
             except Exception as e:
                 messagebox.showerror("Error", f"Error al guardar archivo:\n{str(e)}")
     
+    def save_formulas(self):
+        """Guardar las fórmulas detectadas en un archivo separado"""
+        if not self.extracted_formulas:
+            messagebox.showwarning("Advertencia", "No hay fórmulas para guardar.")
+            return
+        
+        if self.selected_file:
+            pdf_name = Path(self.selected_file).stem
+            default_name = f"{pdf_name}_formulas.txt"
+        else:
+            default_name = "formulas_extraidas.txt"
+        
+        file_path = filedialog.asksaveasfilename(
+            title="Guardar fórmulas matemáticas",
+            defaultextension=".txt",
+            initialvalue=default_name,
+            filetypes=[
+                ("Archivos de texto", "*.txt"), 
+                ("JSON", "*.json"),
+                ("Todos los archivos", "*.*")
+            ]
+        )
+        
+        if file_path:
+            try:
+                if file_path.endswith('.json'):
+                    # Guardar como JSON estructurado
+                    formula_data = {
+                        "metadata": {
+                            "source_file": os.path.basename(self.selected_file) if self.selected_file else "unknown",
+                            "extraction_method": self.extraction_method.get(),
+                            "total_formulas": len(self.extracted_formulas),
+                            "extraction_date": str(Path(file_path).stat().st_mtime)
+                        },
+                        "formulas": [
+                            {
+                                "id": i+1,
+                                "content": formula,
+                                "length": len(formula)
+                            }
+                            for i, formula in enumerate(self.extracted_formulas)
+                        ]
+                    }
+                    
+                    with open(file_path, 'w', encoding='utf-8') as file:
+                        json.dump(formula_data, file, indent=2, ensure_ascii=False)
+                else:
+                    # Guardar como texto plano
+                    with open(file_path, 'w', encoding='utf-8') as file:
+                        file.write("FÓRMULAS MATEMÁTICAS EXTRAÍDAS\n")
+                        file.write("="*50 + "\n\n")
+                        
+                        for i, formula in enumerate(self.extracted_formulas, 1):
+                            file.write(f"Fórmula {i}:\n")
+                            file.write(f"{formula}\n\n")
+                            file.write("-"*30 + "\n\n")
+                
+                messagebox.showinfo("Éxito", f"Fórmulas guardadas en:\n{file_path}")
+                self.status_label.config(text=f"Fórmulas guardadas: {os.path.basename(file_path)}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Error al guardar fórmulas:\n{str(e)}")
+    
     def clear_text(self):
-        """Limpiar el área de texto y resetear"""
+        """Limpiar todas las áreas y resetear la aplicación"""
         self.text_area.delete(1.0, tk.END)
+        self.formula_area.delete(1.0, tk.END)
         self.extracted_text = ""
+        self.extracted_formulas = []
         self.selected_file = None
         self.total_pages = 0
         self.file_label.config(text="Ningún archivo seleccionado")
@@ -471,22 +928,62 @@ class PDFTextExtractor:
         self.pages_entry.config(state="disabled")
         self.extract_btn.config(state="disabled")
         self.save_btn.config(state="disabled")
+        self.save_formulas_btn.config(state="disabled")
         self.status_label.config(text="Listo")
 
 def main():
-    # Verificar dependencias
+    """Función principal con verificación de dependencias"""
+    # Verificar dependencias básicas
+    missing_deps = []
+    
     try:
         import PyPDF2
+    except ImportError:
+        missing_deps.append("PyPDF2")
+    
+    try:
         import requests
-    except ImportError as e:
-        print("Error: Faltan dependencias requeridas.")
-        print("Instala las dependencias con:")
-        print("pip install PyPDF2 requests")
+    except ImportError:
+        missing_deps.append("requests")
+    
+    try:
+        import PIL
+    except ImportError:
+        missing_deps.append("Pillow")
+    
+    try:
+        import fitz
+    except ImportError:
+        missing_deps.append("PyMuPDF")
+    
+    if missing_deps:
+        print("Error: Faltan las siguientes dependencias:")
+        for dep in missing_deps:
+            print(f"  - {dep}")
+        print("\nInstala las dependencias con:")
+        print("pip install PyPDF2 requests Pillow PyMuPDF")
         return
     
+    # Crear y ejecutar aplicación
     root = tk.Tk()
-    app = PDFTextExtractor(root)
-    root.mainloop()
+    app = PDFFormulaExtractor(root)
+    
+    # Configurar cierre limpio
+    def on_closing():
+        try:
+            root.quit()
+            root.destroy()
+        except:
+            pass
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        print("\nAplicación cerrada por el usuario")
+    except Exception as e:
+        print(f"Error inesperado: {e}")
 
 if __name__ == "__main__":
     main()
