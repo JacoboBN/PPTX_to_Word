@@ -28,6 +28,8 @@ class FormulaProcessor:
             r'\d+\s*[×*]\s*\([^)]+\)',  # Multiplicaciones con paréntesis
             r'[A-Za-z]\s*:\s*[^A-Z\n]{10,}',  # Definiciones de variables
             r'√\w+|∑|∫|∂|α|β|γ|δ|π|θ|λ|μ|σ|Σ|Π',  # Símbolos matemáticos
+            r'^[A-Za-z]\s*=\s*.+?=.+?=.+',  # NUEVO: Ecuaciones largas con varios signos igual
+            r'^[A-Za-z]\s*=\s*[\d\w\s\+\-\*/\.,\(\)]+\/[\d\w\.,\(\)]+',  # NUEVO: Fracciones largas
         ]
     
     def detect_formulas(self, text):
@@ -786,7 +788,7 @@ class PDFTextExtractor:
         file_path = filedialog.asksaveasfilename(
             title="Guardar documento Word",
             defaultextension=".docx",
-            initialvalue=default_name,
+            initialfile=default_name,  # <-- Cambiado aquí
             filetypes=[("Documentos Word", "*.docx"), ("Todos los archivos", "*.*")]
         )
         
@@ -836,7 +838,7 @@ class PDFTextExtractor:
         file_path = filedialog.asksaveasfilename(
             title="Guardar texto como",
             defaultextension=".txt",
-            initialvalue=default_name,
+            initialfile=default_name,  # <-- Cambiado aquí
             filetypes=[("Archivos de texto", "*.txt"), ("Todos los archivos", "*.*")]
         )
         
