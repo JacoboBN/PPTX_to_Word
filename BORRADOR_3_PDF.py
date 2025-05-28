@@ -481,7 +481,7 @@ class PDFTextExtractor:
         file_path = filedialog.asksaveasfilename(
             title="Guardar texto como",
             defaultextension=".txt",
-            initialvalue=default_name,
+            initialfile=default_name,
             filetypes=[("Archivos de texto", "*.txt"), ("Todos los archivos", "*.*")]
         )
         
@@ -517,7 +517,7 @@ class PDFTextExtractor:
         file_path = filedialog.asksaveasfilename(
             title="Guardar como Word",
             defaultextension=".docx",
-            initialvalue=default_name,
+            initialfile=default_name,
             filetypes=[("Documentos Word", "*.docx"), ("Todos los archivos", "*.*")]
         )
         
