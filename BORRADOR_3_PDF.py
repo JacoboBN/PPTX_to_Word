@@ -426,27 +426,41 @@ class PDFTextExtractor:
                 self.total_pages_label.config(text="(No se pudo determinar el número de páginas)")
     
     def extract_text_from_pdf(self, file_path, selected_pages=None):
-        """Extraer texto usando PyPDF2"""
+        """Extraer texto usando fitz (PyMuPDF) y como respaldo PyPDF2"""
         text = ""
         try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                total_pages = len(pdf_reader.pages)
-                
-                if selected_pages is None:
-                    selected_pages = list(range(1, total_pages + 1))
-                
-                for page_num in selected_pages:
-                    if 1 <= page_num <= total_pages:
-                        page = pdf_reader.pages[page_num - 1]
-                        page_text = page.extract_text()
-                        if page_text.strip():
-                            text += f"\n--- Página {page_num} ---\n"
-                            text += page_text + "\n"
-        
-        except Exception as e:
-            raise Exception(f"Error al leer PDF: {str(e)}")
-        
+            import fitz  # PyMuPDF
+            doc = fitz.open(file_path)
+            total_pages = doc.page_count
+            if selected_pages is None:
+                selected_pages = list(range(1, total_pages + 1))
+            for page_num in selected_pages:
+                if 1 <= page_num <= total_pages:
+                    page = doc.load_page(page_num - 1)
+                    page_text = page.get_text("text")  # Usa el modo "text" para mejor formato
+                    if page_text.strip():
+                        text += f"\n--- Página {page_num} ---\n"
+                        text += page_text + "\n"
+            doc.close()
+            if not text.strip():
+                raise Exception("fitz no extrajo texto, usar PyPDF2")
+        except Exception:
+            # Respaldo: PyPDF2
+            try:
+                with open(file_path, 'rb') as file:
+                    pdf_reader = PyPDF2.PdfReader(file)
+                    total_pages = len(pdf_reader.pages)
+                    if selected_pages is None:
+                        selected_pages = list(range(1, total_pages + 1))
+                    for page_num in selected_pages:
+                        if 1 <= page_num <= total_pages:
+                            page = pdf_reader.pages[page_num - 1]
+                            page_text = page.extract_text()
+                            if page_text and page_text.strip():
+                                text += f"\n--- Página {page_num} ---\n"
+                                text += page_text + "\n"
+            except Exception as e:
+                raise Exception(f"Error al leer PDF: {str(e)}")
         return text
     
     def extract_text_with_ocr(self, file_path, selected_pages=None):
