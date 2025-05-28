@@ -33,12 +33,12 @@ class PDFTextExtractor:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(4, weight=1)
+        main_frame.rowconfigure(5, weight=1)
         
         # Título
         title_label = ttk.Label(main_frame, text="Extractor de Texto PDF Mejorado", 
                                font=("Arial", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        title_label.grid(row=0, column=0, columnspan=4, pady=(0, 20), sticky=tk.W)
         
         # Botón para seleccionar archivo
         self.select_btn = ttk.Button(main_frame, text="Seleccionar PDF", 
@@ -47,11 +47,11 @@ class PDFTextExtractor:
         
         # Label para mostrar archivo seleccionado
         self.file_label = ttk.Label(main_frame, text="Ningún archivo seleccionado")
-        self.file_label.grid(row=1, column=1, sticky=(tk.W, tk.E))
+        self.file_label.grid(row=1, column=1, columnspan=3, sticky=(tk.W, tk.E))
         
         # Frame para opciones OCR
         ocr_frame = ttk.LabelFrame(main_frame, text="Opciones OCR", padding="5")
-        ocr_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
+        ocr_frame.grid(row=2, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=(10, 0))
         ocr_frame.columnconfigure(1, weight=1)
         
         # Checkbox para OCR
@@ -76,8 +76,8 @@ class PDFTextExtractor:
         
         # Frame para selección de páginas
         page_frame = ttk.Frame(main_frame)
-        page_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
-        page_frame.columnconfigure(1, weight=1)
+        page_frame.grid(row=3, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=(10, 0))
+        page_frame.columnconfigure(2, weight=1)
         
         # Checkbox para todas las páginas
         self.all_pages = tk.BooleanVar(value=True)
@@ -96,10 +96,17 @@ class PDFTextExtractor:
         # Label informativo sobre total de páginas
         self.total_pages_label = ttk.Label(page_frame, text="", foreground="gray")
         self.total_pages_label.grid(row=0, column=3, padx=(10, 0), sticky=tk.W)
+
+        # Checkbox para separación por páginas
+        self.page_separator = tk.BooleanVar(value=True)
+        self.page_separator_checkbox = ttk.Checkbutton(
+            main_frame, text="Separar texto por páginas", variable=self.page_separator
+        )
+        self.page_separator_checkbox.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(10, 0))
         
         # Área de texto para mostrar el contenido
         text_frame = ttk.Frame(main_frame)
-        text_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(20, 0))
+        text_frame.grid(row=5, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(20, 0))
         text_frame.columnconfigure(0, weight=1)
         text_frame.rowconfigure(0, weight=1)
         
@@ -109,7 +116,7 @@ class PDFTextExtractor:
         
         # Frame para botones inferiores
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=5, column=0, columnspan=3, pady=(20, 0))
+        button_frame.grid(row=6, column=0, columnspan=4, pady=(20, 0))
         
         # Botón para extraer texto
         self.extract_btn = ttk.Button(button_frame, text="Extraer Texto", 
@@ -133,15 +140,14 @@ class PDFTextExtractor:
         
         # Barra de progreso
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 0))
+        self.progress.grid(row=7, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=(10, 0))
         
         # Label de estado
         self.status_label = ttk.Label(main_frame, text="Listo")
-        self.status_label.grid(row=7, column=0, columnspan=3, pady=(5, 0))
+        self.status_label.grid(row=8, column=0, columnspan=4, pady=(5, 0))
         
         self.selected_file = None
         self.total_pages = 0
-    
     def fix_text_spacing(self, text):
         """Corregir problemas de espaciado en texto extraído"""
         # Patrón para detectar palabras concatenadas (minúscula seguida de mayúscula)
@@ -325,7 +331,8 @@ class PDFTextExtractor:
                         if page_text.strip():  # Solo agregar si hay texto
                             # Aplicar corrección de espaciado
                             page_text = self.fix_text_spacing(page_text)
-                            text += f"\n--- Página {page_num} ---\n"
+                            if self.page_separator.get():
+                                text += f"\n--- Página {page_num} ---\n"
                             text += page_text + "\n"
         
         except Exception as e:
@@ -383,7 +390,8 @@ class PDFTextExtractor:
                             page_text = page_result['ParsedText']
                             # Post-procesar el texto
                             page_text = self.post_process_ocr_text(page_text)
-                            text += f"\n--- Página {selected_pages[i] if selected_pages else i + 1} (OCR) ---\n"
+                            if self.page_separator.get():
+                                text += f"\n--- Página {selected_pages[i] if selected_pages else i + 1} (OCR) ---\n"
                             text += page_text + "\n"
 
                 return text
